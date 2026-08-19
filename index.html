@@ -576,13 +576,23 @@ function start(){
   reset('countdown');
   buildTrack();
   boardLoad();
+  // The first beep has to be fired here. The countdown starts at exactly 3, so
+  // there is no crossing into 3 for update() to notice, and you only heard
+  // two beeps and the light.
+  beep(660, 0.16, 0.30);
 }
 
 /* ── update ──────────────────────────────────────────────────────── */
 function update(dt){
   if(mode==='countdown'){
+    const wasAt = Math.ceil(countdown);
     countdown -= dt;
-    if(countdown <= 0){ mode='racing'; countdown=0; }
+    const nowAt = Math.ceil(countdown);
+    if(nowAt !== wasAt && nowAt > 0) beep(660, 0.16, 0.30);   // 3, 2, 1
+    if(countdown <= 0){
+      if(mode !== 'racing') beep(1050, 0.42, 0.34);           // and away
+      mode='racing'; countdown=0;
+    }
     return;
   }
   if(mode!=='racing') return;
@@ -607,8 +617,9 @@ function update(dt){
   // Leaning on it: tight corner, high speed, and not much grip to spare.
   if(!airborne){
     const push = Math.abs(seg.curve) * speedPct * (1 - rig.grip);
+    scrubAmt = push;                       // the squeal reads this
     if(push > SCRUB_AT) speed -= (push - SCRUB_AT) * SCRUB * dt * 1000;
-  }
+  } else scrubAmt = 0;                     // no tyres on the road, no squeal
 
   if(key.gas && crashT<=0) speed += rig.accel * dt * 1000;
   else if(key.brake)       speed += rig.brake * dt * 1000;
@@ -650,6 +661,7 @@ function update(dt){
     // A little forgiveness, so a squeeze that looks survivable is.
     const clear = halfWidth(rig) + halfWidth(t.rig);
     if(Math.abs(playerX - t.offset) < clear * 0.9){
+      thud(0.5);
       speed = Math.min(speed, t.speed) * 0.55;
       crashT = 0.45;
       playerX += (playerX > t.offset ? 1 : -1) * 0.22;
@@ -661,7 +673,7 @@ function update(dt){
     for(const p of seg.props){
       const clear = halfWidth(rig) + (p.w/2)/ROAD_W;
       if(Math.abs(playerX - p.offset) < clear){
-        speed *= 0.6; crashT = 0.35; break;
+        thud(0.28); speed *= 0.6; crashT = 0.35; break;
       }
     }
   }
@@ -687,7 +699,10 @@ function update(dt){
       const impact = -vy;
       worldY = roadY; vy = 0; airborne = false;
       // A heavy landing scrubs speed and rattles the steering for a moment.
-      if(impact > 5200){ speed *= 0.86; crashT = Math.max(crashT, 0.22); landedHard = 0.35; }
+      if(impact > 5200){
+        thud(Math.min(0.5, impact/22000));
+        speed *= 0.86; crashT = Math.max(crashT, 0.22); landedHard = 0.35;
+      }
     }
   } else {
     worldY = roadY;
@@ -1203,6 +1218,7 @@ function musicStart(){
     MUS.started=1; MUS.on=1; MUS.step=0; MUS.next=AC.currentTime+0.08;
     MUS.timer=setInterval(schedule, 25);
     schedule();
+    sfxInit();
 
     // Browsers won't let audio start without a user gesture, so on a cold load
     // the context comes up suspended and stays silent. Nothing can change that
@@ -1256,6 +1272,102 @@ function musicSpeed(pct){
   MUS.filt.frequency.setTargetAtTime(target, AC.currentTime, 0.25);
 }
 
+
+/* ── SOUND EFFECTS ────────────────────────────────────────────────
+   On their own bus, not the music one, so turning the music off with M leaves
+   the engine and the tyres where they are.
+
+   The engine and the squeal are each a single voice that is created once and
+   then modulated, rather than a new node per frame. Spawning a node per frame
+   at 60fps is how you end up with a click track and, eventually, a stall.
+   Every parameter move uses setTargetAtTime so nothing steps.
+   ───────────────────────────────────────────────────────────────── */
+const SFX = { bus:null, eng:null, sq:null, ready:0 };
+let scrubAmt = 0;                    // how hard the tyres are being asked to work
+
+function sfxInit(){
+  if(SFX.ready || !AC) return;
+  try{
+    SFX.bus = AC.createGain(); SFX.bus.gain.value = 0.9;
+    const lim = AC.createDynamicsCompressor();
+    lim.threshold.value=-8; lim.knee.value=6; lim.ratio.value=10;
+    lim.attack.value=0.004; lim.release.value=0.18;
+    SFX.bus.connect(lim); lim.connect(AC.destination);
+
+    // Engine: two detuned saws through a lowpass. Runs continuously and is
+    // pitched by speed; the gain is what makes it appear and disappear.
+    const eg = AC.createGain(), ef = AC.createBiquadFilter();
+    eg.gain.value = 0; ef.type='lowpass'; ef.frequency.value = 700;
+    const o1 = AC.createOscillator(), o2 = AC.createOscillator();
+    o1.type='sawtooth'; o2.type='square'; o2.detune.value = -12;
+    o1.frequency.value = 60; o2.frequency.value = 30;
+    o1.connect(ef); o2.connect(ef); ef.connect(eg); eg.connect(SFX.bus);
+    o1.start(); o2.start();
+    SFX.eng = { o1, o2, g:eg, f:ef };
+
+    // Tyres: filtered noise, opened by how hard the corner is being leaned on.
+    const sg = AC.createGain(), sf = AC.createBiquadFilter();
+    sg.gain.value = 0; sf.type='bandpass'; sf.frequency.value = 2100; sf.Q.value = 5.5;
+    const src = AC.createBufferSource();
+    src.buffer = noise(); src.loop = true;
+    src.connect(sf); sf.connect(sg); sg.connect(SFX.bus);
+    src.start();
+    SFX.sq = { src, g:sg, f:sf };
+
+    SFX.ready = 1;
+  }catch(e){}
+}
+
+/** Called every frame. `pct` is 0..1 of the rig's top speed. */
+function sfxUpdate(pct, driving){
+  if(!SFX.ready || !AC) return;
+  const t = AC.currentTime;
+  const e = SFX.eng;
+  // Pitch rises with speed but never from zero, so an idling rig still hums.
+  e.o1.frequency.setTargetAtTime(52 + pct*150, t, 0.08);
+  e.o2.frequency.setTargetAtTime(26 + pct*75,  t, 0.08);
+  e.f.frequency.setTargetAtTime(420 + pct*2200, t, 0.12);
+  e.g.gain.setTargetAtTime(driving ? 0.05 + pct*0.075 : 0, t, 0.15);
+
+  const sq = SFX.sq;
+  const squeal = driving ? Math.max(0, Math.min(1, (scrubAmt - SCRUB_AT*0.75) * 2.6)) : 0;
+  sq.g.gain.setTargetAtTime(squeal * 0.11, t, 0.06);
+  sq.f.frequency.setTargetAtTime(1700 + squeal*1500 + pct*600, t, 0.08);
+}
+
+/** A short tone. Used for the countdown and the light. */
+function beep(freq, dur, vol){
+  if(!SFX.ready || !AC) return;
+  const t = AC.currentTime;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.type='square'; o.frequency.value = freq;
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.exponentialRampToValueAtTime(vol, t+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
+  o.connect(g); g.connect(SFX.bus);
+  o.start(t); o.stop(t+dur+0.03);
+}
+
+/** Hitting something: a noise burst with a low thump under it. */
+function thud(force){
+  if(!SFX.ready || !AC) return;
+  const t = AC.currentTime, v = Math.max(0.15, Math.min(0.55, force));
+  const src = AC.createBufferSource(), g = AC.createGain(), lp = AC.createBiquadFilter();
+  src.buffer = noise(); lp.type='lowpass'; lp.frequency.value = 1400;
+  g.gain.setValueAtTime(v, t);
+  g.gain.exponentialRampToValueAtTime(0.0001, t+0.32);
+  src.connect(lp); lp.connect(g); g.connect(SFX.bus);
+  src.start(t); src.stop(t+0.34);
+
+  const o = AC.createOscillator(), og = AC.createGain();
+  o.frequency.setValueAtTime(120, t);
+  o.frequency.exponentialRampToValueAtTime(38, t+0.22);
+  og.gain.setValueAtTime(v*1.1, t);
+  og.gain.exponentialRampToValueAtTime(0.0001, t+0.26);
+  o.connect(og); og.connect(SFX.bus);
+  o.start(t); o.stop(t+0.28);
+}
+
 /* ── loop ────────────────────────────────────────────────────────── */
 let last = performance.now();
 function frame(now){
@@ -1269,7 +1381,9 @@ function frame(now){
     if(mode==='countdown') countdownScreen();
     if(mode==='done') doneScreen();
   }
-  musicSpeed(mode==='racing' ? Math.min(1, speed/rig.maxSpeed) : 0.15);
+  const spdPct = mode==='racing' ? Math.min(1, speed/rig.maxSpeed) : 0;
+  musicSpeed(mode==='racing' ? spdPct : 0.15);
+  sfxUpdate(spdPct, mode==='racing' || mode==='countdown');
   if(musNote > 0){
     musNote--;
     const label = MUS.on ? ('♪ ' + TRACKS[MUS.track].name) : '♪ OFF';

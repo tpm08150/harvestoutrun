@@ -88,6 +88,23 @@ The master filter opens as you go faster — about 900Hz stopped and 5kHz flat
 out — which is the cheapest way to make the music feel like it is reacting to
 the driving.
 
+## Sound effects
+
+On their own bus, so turning the music off with **M** leaves the engine and the
+tyres running.
+
+| Effect | Driven by |
+| --- | --- |
+| Countdown, three beeps and a higher one on GO | the countdown crossing each whole number |
+| Engine | speed — pitch and volume both rise, never quite silent while driving |
+| Tyre squeal | the same scrub figure the physics uses, so it only sings when the tyres are actually being asked for more than they have |
+| Thud | hitting traffic, hitting scenery, or landing hard off the ramp |
+
+⚠️ The engine and the squeal are each **one voice, created once and modulated**,
+never a node per frame. Spawning nodes at 60fps gives you a click track and
+eventually stalls the context. Every parameter move uses `setTargetAtTime` so
+nothing steps.
+
 ## Names
 
 Three initials, cabinet style, the same as Soundcheck. Enforced in the page and
