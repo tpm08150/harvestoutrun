@@ -73,8 +73,16 @@ Notes are queued onto the audio clock about 120ms early by a lookahead
 scheduler, the same shape Soundcheck uses, because `setInterval` is nowhere near
 accurate enough to place a note on a beat.
 
-Browsers refuse to start audio outside a user gesture, so it opens on the first
-key or tap rather than on load.
+It starts on load. Browsers refuse to *begin* audio outside a user gesture, so
+on a cold visit the context comes up suspended and silent — nothing can change
+that. What it does instead is resume on the first interaction of any kind
+anywhere on the page, rather than waiting for a control to be pressed. A repeat
+visitor usually gets music immediately, since Chrome allows audio once you have
+interacted with a site before.
+
+⚠️ The audio clock does not advance while suspended, so on resume the scheduler
+is rebased. Without that it would dump every sixteenth it missed at once — a
+burst of noise instead of a downbeat.
 
 The master filter opens as you go faster — about 900Hz stopped and 5kHz flat
 out — which is the cheapest way to make the music feel like it is reacting to

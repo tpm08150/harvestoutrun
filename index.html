@@ -1203,7 +1203,36 @@ function musicStart(){
     MUS.started=1; MUS.on=1; MUS.step=0; MUS.next=AC.currentTime+0.08;
     MUS.timer=setInterval(schedule, 25);
     schedule();
+
+    // Browsers won't let audio start without a user gesture, so on a cold load
+    // the context comes up suspended and stays silent. Nothing can change that
+    // — but it doesn't have to be a *particular* gesture. Any touch, click or
+    // key anywhere on the page will do, rather than only pressing a control.
+    //
+    // A repeat visitor often gets audio immediately: Chrome allows it once you
+    // have interacted with the site before, so on a second visit the context
+    // comes up running and these listeners never fire.
+    if(AC.state === 'suspended') armAudioUnlock();
   }catch(e){ MUS.started=1; MUS.on=0; }
+}
+
+function armAudioUnlock(){
+  const go = () => {
+    if(!AC) return;
+    AC.resume().then(()=>{
+      // The clock does not advance while suspended, so the scheduler's next
+      // slot is now far in the past. Left alone it would dump every missed
+      // sixteenth at once — a burst of noise instead of a downbeat.
+      MUS.step = 0;
+      MUS.next = AC.currentTime + 0.08;
+      musicFlash();
+    }).catch(()=>{});
+    off();
+  };
+  const off = () => ['pointerdown','touchstart','keydown','click'].forEach(
+    ev => window.removeEventListener(ev, go, true));
+  ['pointerdown','touchstart','keydown','click'].forEach(
+    ev => window.addEventListener(ev, go, true));
 }
 
 /* M cycles: track 1 -> track 2 -> off -> track 1. */
@@ -1255,6 +1284,7 @@ function frame(now){
 
 buildTrack();
 boardLoad();
+musicStart();
 requestAnimationFrame(frame);
 </script>
 </body>
