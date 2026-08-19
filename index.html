@@ -520,14 +520,28 @@ function setKey(e, down){
   else return;
   e.preventDefault();
 }
+/** True while the keystroke belongs to something being typed into. */
+function typingInto(e){
+  const el = e.target;
+  if(!el) return false;
+  const tag = el.tagName;
+  return tag==='INPUT' || tag==='TEXTAREA' || tag==='SELECT' || el.isContentEditable;
+}
+
 addEventListener('keydown', e=>{
+  // Anything aimed at a text field is none of the game's business. This is a
+  // target check rather than a game-state one on purpose: every single-key
+  // shortcut here is a letter, so any of them can eat a character out of a
+  // name. "M" toggled the music and swallowed the M out of the name; "R" threw
+  // the run away. Guarding on the target fixes the whole class of it, and the
+  // next shortcut added can't reintroduce it.
+  if(typingInto(e)) return;
+
   musicStart();
   if(e.key==='m' || e.key==='M'){ musicToggle(); e.preventDefault(); return; }
 
-  // While a name is being typed, the name entry owns the keyboard. Without
-  // this, "R" hits the reset shortcut below and throws the run away
-  // mid-name — TYLER resets on the fifth letter — and Enter goes back to the
-  // yard instead of submitting the time.
+  // Belt and braces: the overlay is the only text field today, but the run is
+  // also over here, so nothing driving-related should respond either.
   if(mode==='done' && qualified) return;
 
   if(e.key==='Enter'){ if(mode==='select') start(); else if(mode==='done') reset('select'); return; }
