@@ -121,7 +121,8 @@ const SEG_LEN    = 200;
 const ROAD_W     = 2200;
 const RUMBLE_LEN = 3;
 const DRAW_DIST  = 260;
-const CAM_HEIGHT = 1100;
+const CAM_HEIGHT = 1750;   // eye height above the road
+const CAM_BACK   = 950;    // how far behind the rig the camera sits
 const FOV        = 100;
 const CAM_DEPTH  = 1 / Math.tan((FOV/2) * Math.PI/180);
 const CENTRIFUGAL= 0.32;
@@ -197,6 +198,24 @@ function buildTrack(){
 }
 
 const segAt = z => segments[Math.floor(z/SEG_LEN) % segments.length];
+
+/** Roughly how long a rig is, in world units — the depth of a collision. */
+const CAR_LEN = 420;
+
+/**
+ * Half a rig's width, in the same units as playerX (1 = the road's edge).
+ * `rig.width` is a factor fed to the sprite drawing, so it has to go through
+ * the same 1500-unit body as the sprite does before it means a distance.
+ */
+const halfWidth = r => (1500 * r.width / 2) / ROAD_W;
+
+/** Signed distance from b to a along the track, shortest way round. */
+function gap(a, b){
+  let d = (a - b) % trackLength;
+  if(d >  trackLength/2) d -= trackLength;
+  if(d < -trackLength/2) d += trackLength;
+  return d;
+}
 
 /* Roadside dressing, all of it stuff that lives in a yard. */
 const PROPS = [
@@ -490,29 +509,49 @@ function update(dt){
   playerX = Math.max(-2.4, Math.min(2.4, playerX));
 
   // Traffic, and running into it.
+  //
+  // Two things this has to get right, and the first version got both wrong.
+  //
+  // Lateral: the box is derived from the sprite's real width instead of a
+  // guessed multiple of it. `rig.width` is a drawing factor, not a distance —
+  // treating it as one made a box truck's box 1.6x wider than the truck, about
+  // 80% of the road, so there was no gap left to drive through.
+  //
+  // Longitudinal: the whole step is tested, not just where things ended up. At
+  // 13,600 units a second a rig covers more ground in one frame than a
+  // collision box is deep, so a "are we close right now" check let it pass
+  // clean through traffic whenever the frame rate dipped.
+  const nextPos = (position + speed * dt) % trackLength;
   for(const t of traffic){
+    const relBefore = gap(t.z, position);
     t.z = (t.z + t.speed * dt) % trackLength;
-    const rel = (t.z - position + trackLength) % trackLength;
-    if(rel < SEG_LEN*2.2 && rel > -SEG_LEN && crashT<=0 && speed > 1200){
-      if(Math.abs(playerX - t.offset) < (rig.width + t.rig.width)*0.55){
-        speed = Math.min(speed, t.speed) * 0.35;
-        crashT = 0.7;
-        playerX += (playerX > t.offset ? 1 : -1) * 0.35;
-      }
+    const relAfter  = gap(t.z, nextPos);
+
+    if(crashT > 0 || speed <= 900) continue;
+    const closed = relBefore > 0 && relAfter <= CAR_LEN;   // caught up this frame
+    if(!closed) continue;
+
+    // A little forgiveness, so a squeeze that looks survivable is.
+    const clear = halfWidth(rig) + halfWidth(t.rig);
+    if(Math.abs(playerX - t.offset) < clear * 0.9){
+      speed = Math.min(speed, t.speed) * 0.55;
+      crashT = 0.45;
+      playerX += (playerX > t.offset ? 1 : -1) * 0.22;
     }
   }
 
-  // And into the scenery.
+  // And into the scenery. Same idea — the prop's own width, not a flat guess.
   if(crashT<=0 && off){
     for(const p of seg.props){
-      if(Math.abs(playerX - p.offset) < 0.30 && Math.abs(playerX) > 1){
-        speed *= 0.55; crashT = 0.5; break;
+      const clear = halfWidth(rig) + (p.w/2)/ROAD_W;
+      if(Math.abs(playerX - p.offset) < clear){
+        speed *= 0.6; crashT = 0.35; break;
       }
     }
   }
 
   const before = position;
-  position = (position + speed * dt) % trackLength;
+  position = nextPos;
   if(position < before){            // crossed the line
     finished = lapTime;
     mode = 'done';
@@ -540,8 +579,13 @@ function skyAndGround(){
 }
 
 function render(){
-  const baseSeg = segAt(position);
-  const basePct = (position % SEG_LEN) / SEG_LEN;
+  // The camera sits behind the rig, not on it, so there is road visible either
+  // side of the thing you are driving. Everything below is measured from the
+  // camera rather than from the player, and the draw has to start at the
+  // camera's segment or the road under the rig would be missing.
+  const camZ    = (position - CAM_BACK + trackLength) % trackLength;
+  const baseSeg = segAt(camZ);
+  const basePct = (camZ % SEG_LEN) / SEG_LEN;
   const playerY = baseSeg.p1.world.y + (baseSeg.p2.world.y - baseSeg.p1.world.y) * basePct;
 
   let maxY = H, dxx = -(baseSeg.curve * basePct), xx = 0;
@@ -556,9 +600,9 @@ function render(){
     seg.looped = looped;
 
     project(seg.p1, playerX*ROAD_W - xx, playerY + CAM_HEIGHT,
-            position - (looped ? trackLength : 0), CAM_DEPTH, W, H, ROAD_W);
+            camZ - (looped ? trackLength : 0), CAM_DEPTH, W, H, ROAD_W);
     project(seg.p2, playerX*ROAD_W - xx - dxx, playerY + CAM_HEIGHT,
-            position - (looped ? trackLength : 0), CAM_DEPTH, W, H, ROAD_W);
+            camZ - (looped ? trackLength : 0), CAM_DEPTH, W, H, ROAD_W);
 
     xx  += dxx;
     dxx += seg.curve;
@@ -596,8 +640,8 @@ function render(){
   // further away. Tuned so a van fills about a quarter of the width; deriving
   // it from CAM_DEPTH gave a sprite as wide as the whole canvas.
   const bounce = (speed/rig.maxSpeed) * Math.sin(performance.now()/60) * 2;
-  drawRig(rig, 0.00055, W/2 + (crashT>0 ? Math.sin(performance.now()/28)*14 : 0),
-          H - 18 + bounce, 0, steerHold);
+  drawRig(rig, 0.00040, W/2 + (crashT>0 ? Math.sin(performance.now()/28)*14 : 0),
+          H - 10 + bounce, 0, steerHold);
 }
 
 /* ── HUD and screens ─────────────────────────────────────────────── */
