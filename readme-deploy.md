@@ -63,6 +63,12 @@ Off the tarmac each rig drops to a fraction of its top speed — the van keeps
 the most, the scissor lift the least. Hitting traffic or scenery costs speed
 and briefly takes the steering away.
 
+## Names
+
+Three initials, cabinet style, the same as Soundcheck. Enforced in the page and
+again in the function, since the page is not the only thing that can POST. No
+board reset was needed here — every name already on it fits in three.
+
 ## Cheating
 
 The time is a number in a POST body, so anyone with devtools can send whatever

@@ -62,8 +62,8 @@
   .nametitle{font-family:'Bungee',cursive;font-size:13px;color:var(--tape);
     letter-spacing:1px;text-align:center}
   #nameIn{background:var(--house);border:2px solid var(--truss);color:var(--tape);
-    font-family:'Bungee',cursive;font-size:30px;text-align:center;padding:12px 8px;
-    letter-spacing:6px;text-transform:uppercase;width:100%}
+    font-family:'Bungee',cursive;font-size:40px;text-align:center;padding:12px 8px;
+    letter-spacing:14px;text-indent:14px;text-transform:uppercase;width:100%}
   #nameSave{padding:16px;background:var(--tape);color:var(--house);border:0;
     font-family:'Bungee',cursive;font-size:15px;cursor:pointer}
 
@@ -99,8 +99,8 @@
 
   <div class="nameover" id="nameOver" hidden>
     <form class="namebox" id="nameForm">
-      <p class="nametitle">TOP TEN — ENTER YOUR NAME</p>
-      <input id="nameIn" maxlength="12" autocomplete="off" autocapitalize="characters"
+      <p class="nametitle">TOP TEN — ENTER YOUR INITIALS</p>
+      <input id="nameIn" maxlength="3" autocomplete="off" autocapitalize="characters"
              autocorrect="off" spellcheck="false" inputmode="text">
       <button type="submit" id="nameSave">SAVE</button>
     </form>
@@ -515,7 +515,46 @@ hold(document.getElementById('bB'), ()=>key.brake=true, ()=>key.brake=false);
 hold(document.getElementById('bG'), ()=>{
   if(mode==='select') start(); else if(mode==='done') reset('select'); else key.gas=true;
 }, ()=>key.gas=false);
-cv.addEventListener('click', ()=>{ if(mode==='select') start(); else if(mode==='done') reset('select'); });
+/* ── picking a rig by pointing at it ──────────────────────────────
+   The cards are painted on the canvas, so there is nothing to click — the hit
+   test has to be done by hand. The canvas is drawn at a fixed 960x540 and then
+   stretched by CSS, so a pointer position has to be scaled back into canvas
+   space before it means anything.
+
+   Card geometry is kept here in one place and used by both the drawing and the
+   hit test, so the two can't drift apart. */
+const CARD = { top:150, height:300, pad:10 };
+function cardAt(e){
+  const r = cv.getBoundingClientRect();
+  const px = (e.clientX - r.left) * (W / r.width);
+  const py = (e.clientY - r.top)  * (H / r.height);
+  if(py < CARD.top || py > CARD.top + CARD.height) return null;
+  const cw = W / RIGS.length;
+  const i = Math.floor(px / cw);
+  if(i < 0 || i >= RIGS.length) return null;
+  // Ignore the gutter between two cards, so a near-miss doesn't pick the
+  // neighbour you were not aiming at.
+  const within = px - i*cw;
+  if(within < CARD.pad || within > cw - CARD.pad) return null;
+  return i;
+}
+
+cv.addEventListener('click', (e)=>{
+  if(mode==='select'){
+    const hit = cardAt(e);
+    // Tap a rig to choose it; tap the chosen one again to go. Anywhere off the
+    // cards just goes, which is what tapping the canvas always did.
+    if(hit === null || hit === pick) start();
+    else pick = hit;
+    return;
+  }
+  if(mode==='done') reset('select');
+});
+
+// Only on a pointer that can hover — a phone has no cursor to change.
+cv.addEventListener('mousemove', (e)=>{
+  cv.style.cursor = (mode==='select' && cardAt(e) !== null) ? 'pointer' : 'default';
+});
 
 /* ── run control ─────────────────────────────────────────────────── */
 function reset(to){
@@ -816,13 +855,13 @@ function selectScreen(){
   centre('HARVEST OUT RUN', 78, 36, '#E8E337', 'bold ');
   centre('One lap of the yard. Pick your rig.', 112, 15, '#8B94A3', '');
 
-  const cw = W/4;
+  const cw = W/RIGS.length;
   RIGS.forEach((r,i)=>{
     const cx = cw*i + cw/2, on = i===pick;
     x.fillStyle = on ? 'rgba(232,227,55,.10)' : 'rgba(255,255,255,.03)';
-    x.fillRect(cw*i+10, 150, cw-20, 300);
+    x.fillRect(cw*i+CARD.pad, CARD.top, cw-CARD.pad*2, CARD.height);
     x.strokeStyle = on ? '#E8E337' : '#39424F'; x.lineWidth = on?3:1;
-    x.strokeRect(cw*i+10, 150, cw-20, 300);
+    x.strokeRect(cw*i+CARD.pad, CARD.top, cw-CARD.pad*2, CARD.height);
 
     drawRig(r, 0.00030, cx, 330, 0, 0);
 
@@ -836,7 +875,7 @@ function selectScreen(){
     bar(cw*i+30, 438, cw-60, 'GRIP',  r.grip/BEST_GRIP,      on);
   });
 
-  centre('← →  choose      ENTER / GO  start', H-38, 14, '#8B94A3', 'bold ');
+  centre('TAP A RIG  or  ← →      ENTER / GO  start', H-38, 14, '#8B94A3', 'bold ');
   centre('Off the tarmac is slow. So is hitting anything.', H-18, 11, '#39424F', '');
 }
 function bar(bx,by,bw,label,pct,on){
@@ -881,7 +920,7 @@ const canFetch = () => typeof fetch==='function' && /^https?:/.test(location.pro
 
 const cleanBoard = a => (Array.isArray(a)?a:[])
   .filter(e=>e && typeof e.time==='number' && isFinite(e.time) && e.time>0)
-  .map(e=>({ name:String(e.name||'ANON').slice(0,12), time:Number(e.time),
+  .map(e=>({ name:String(e.name||'AAA').slice(0,3), time:Number(e.time),
              rig:String(e.rig||'van').slice(0,12), when:Number(e.when)||0 }))
   .sort((a,b)=>a.time-b.time);
 
@@ -944,7 +983,7 @@ const lastName = () => { try{ return localStorage.getItem(LAST_NAME)||''; }catch
 
 document.getElementById('nameForm').addEventListener('submit', (e)=>{
   e.preventDefault();
-  const name = (nameIn.value.trim() || 'ANON').toUpperCase().slice(0,12);
+  const name = (nameIn.value.trim() || 'AAA').toUpperCase().slice(0,3);
   try{ localStorage.setItem(LAST_NAME, name); }catch(e){}
   nameBuf = name;
   qualified = false;

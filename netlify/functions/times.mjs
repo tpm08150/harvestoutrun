@@ -39,7 +39,10 @@ const clean = (arr) => {
   const rows = (Array.isArray(arr) ? arr : [])
     .filter((e) => e && typeof e.time === 'number' && isFinite(e.time))
     .map((e) => ({
-      name: String(e.name ?? 'ANON').replace(/[^A-Za-z0-9 ._-]/g, '').slice(0, 12) || 'ANON',
+      // Three initials, cabinet style — the same as Soundcheck. Enforced here
+      // as well as in the page, because the page is not the only thing that can
+      // POST. The board needs no reset: every name on it already fits.
+      name: String(e.name ?? 'AAA').replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'AAA',
       time: Math.round(Math.max(MIN_TIME, Math.min(MAX_TIME, e.time)) * 1000) / 1000,
       rig: RIGS.includes(e.rig) ? e.rig : 'van',
       when: Number(e.when) || Date.now(),
