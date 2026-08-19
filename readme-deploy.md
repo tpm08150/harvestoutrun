@@ -63,6 +63,23 @@ Off the tarmac each rig drops to a fraction of its top speed — the van keeps
 the most, the scissor lift the least. Hitting traffic or scenery costs speed
 and briefly takes the steering away.
 
+## Soundtrack
+
+Synthwave, generated from oscillators rather than a file, so the page stays
+self-contained with nothing to fetch. Two tracks — NIGHT SHIFT and OVERDRIVE —
+cycled with **M**, then off.
+
+Notes are queued onto the audio clock about 120ms early by a lookahead
+scheduler, the same shape Soundcheck uses, because `setInterval` is nowhere near
+accurate enough to place a note on a beat.
+
+Browsers refuse to start audio outside a user gesture, so it opens on the first
+key or tap rather than on load.
+
+The master filter opens as you go faster — about 900Hz stopped and 5kHz flat
+out — which is the cheapest way to make the music feel like it is reacting to
+the driving.
+
 ## Names
 
 Three initials, cabinet style, the same as Soundcheck. Enforced in the page and
