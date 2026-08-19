@@ -1,0 +1,800 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Harvest Out Run</title>
+<meta name="description" content="Time trial around the yard in a forklift, a scissor lift, a service van or a box truck.">
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Bungee&family=IBM+Plex+Mono:wght@400;600&display=swap');
+  :root{
+    --deck:#151A21; --truss:#8B94A3; --tape:#E8E337;
+    --xlr:#3FBF8F; --clip:#FF4D3D; --house:#0A0C10;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    background:var(--house);color:var(--truss);
+    font-family:'IBM Plex Mono',monospace;
+    min-height:100vh;display:flex;align-items:center;justify-content:center;padding:16px;
+    background-image:
+      repeating-linear-gradient(90deg,rgba(139,148,163,.05) 0 1px,transparent 1px 40px),
+      repeating-linear-gradient(0deg,rgba(139,148,163,.05) 0 1px,transparent 1px 40px);
+  }
+  .rig{width:100%;max-width:1100px}
+
+  header{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;
+    border-bottom:2px solid var(--truss);padding-bottom:8px;margin-bottom:10px}
+  h1{font-family:'Bungee',cursive;font-size:clamp(15px,2.6vw,25px);
+    color:var(--tape);letter-spacing:.5px;line-height:1;white-space:nowrap}
+  h1 .brand{color:var(--xlr)}
+  .sub{font-size:11px;text-transform:uppercase;letter-spacing:2px;opacity:.6}
+  .meters{margin-left:auto;display:flex;gap:14px;font-size:11px;
+    text-transform:uppercase;letter-spacing:1px}
+  .meters b{color:var(--tape);font-weight:600}
+
+  canvas{display:block;width:100%;height:auto;background:#0E1218;
+    border:2px solid var(--truss);image-rendering:pixelated;touch-action:none}
+
+  .legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;
+    font-size:10.5px;text-transform:uppercase;letter-spacing:1.2px;opacity:.65}
+  .legend span b{color:var(--xlr)}
+
+  .touch{display:none;gap:8px;margin-top:10px}
+  .touch button{flex:1;padding:16px 0;background:var(--deck);color:var(--truss);
+    border:2px solid var(--truss);font-family:'Bungee',cursive;
+    font-size:clamp(10px,3vw,14px);white-space:nowrap;
+    border-radius:2px;user-select:none;-webkit-user-select:none}
+  .touch button:active{background:var(--tape);color:var(--house)}
+  @media(hover:none) and (pointer:coarse){.touch{display:flex}}
+  @media (prefers-reduced-motion:reduce){*{animation:none!important}}
+</style>
+</head>
+<body>
+<div class="rig">
+  <header>
+    <h1><span class="brand">Harvest</span> Out Run</h1>
+    <div class="sub">Time trial</div>
+    <div class="meters">
+      <div>Rig <b id="mRig">—</b></div>
+      <div>Lap <b id="mLap">—</b></div>
+      <div>Best <b id="mBest">—</b></div>
+      <div>Speed <b id="mSpd">0</b></div>
+    </div>
+  </header>
+
+  <canvas id="c" width="960" height="540"></canvas>
+
+  <div class="legend">
+    <span><b>← →</b> steer</span>
+    <span><b>↑ / SPACE</b> throttle</span>
+    <span><b>↓</b> brake</span>
+    <span><b>ENTER</b> start / retry</span>
+    <span><b>R</b> back to the yard</span>
+    <span><b>Off the tarmac is slow</b> — and so is hitting anything</span>
+    <span><b>One lap. Fastest time wins.</b></span>
+  </div>
+
+  <div class="touch">
+    <button id="bL">◀</button><button id="bB">BRAKE</button><button id="bG">GO</button><button id="bR">▶</button>
+  </div>
+</div>
+<script>
+/* ── Harvest Out Run ───────────────────────────────────────────────
+   A Pole Position-shaped time trial around the yard, in the things we
+   actually drive.
+
+   The road is drawn the way those cabinets did it: no 3D at all, just a
+   list of segments, each with a curve and a height, projected to the
+   screen back-to-front. Everything else — traffic, cones, the rig you
+   are sitting in — is a flat sprite scaled by how far away it is.
+
+   The four rigs are meant to feel genuinely unequal, so the board is
+   kept per rig. A box truck will always beat a scissor lift; the
+   interesting question is whether you can beat someone else's scissor
+   lift.
+   ───────────────────────────────────────────────────────────────── */
+const cv = document.getElementById('c');
+const x  = cv.getContext('2d');
+const W  = cv.width, H = cv.height;
+
+/* ── the rigs ──────────────────────────────────────────────────────
+   maxSpeed is in game units; the HUD divides it down to something that
+   reads like mph. grip is how well it resists being pushed wide on a
+   curve — low grip is what makes the box truck a handful. */
+const RIGS = [
+  { id:'forklift', name:'FORKLIFT',    tag:'Slow, turns on a dime',
+    maxSpeed:8200,  accel:3.2, brake:-5.5, grip:0.62, offRoad:0.30, width:0.66,
+    body:'#E8A020', roof:'#C07800', mast:true },
+  { id:'scissor',  name:'SCISSOR LIFT', tag:'Barely legal on a track',
+    maxSpeed:6200,  accel:2.1, brake:-4.5, grip:0.30, offRoad:0.22, width:0.72,
+    body:'#3FBF8F', roof:'#2A8C68', deck:true },
+  { id:'van',      name:'SERVICE VAN',  tag:'The all-rounder',
+    maxSpeed:11800, accel:2.9, brake:-6.2, grip:0.52, offRoad:0.42, width:0.60,
+    body:'#D8DDE4', roof:'#A9B2BD' },
+  { id:'boxtruck', name:'BOX TRUCK',    tag:'Fast. Not agile.',
+    maxSpeed:13600, accel:1.7, brake:-4.8, grip:0.34, offRoad:0.34, width:0.86,
+    body:'#4E7FD0', roof:'#2F5AA8', tall:true },
+];
+
+/* ── road geometry ───────────────────────────────────────────────── */
+const SEG_LEN    = 200;
+const ROAD_W     = 2200;
+const RUMBLE_LEN = 3;
+const DRAW_DIST  = 260;
+const CAM_HEIGHT = 1100;
+const FOV        = 100;
+const CAM_DEPTH  = 1 / Math.tan((FOV/2) * Math.PI/180);
+const CENTRIFUGAL= 0.32;
+
+let segments = [];
+let trackLength = 0;
+
+const COLORS = {
+  light:{ road:'#4A5058', grass:'#2C3A26', rumble:'#D8DDE4', lane:'#E8E337' },
+  dark: { road:'#434951', grass:'#27331F', rumble:'#B23C3C', lane:null },
+  start:{ road:'#8B94A3', grass:'#2C3A26', rumble:'#8B94A3', lane:null },
+};
+
+const lastY = () => segments.length ? segments[segments.length-1].p2.world.y : 0;
+
+function addSegment(curve, y){
+  const n = segments.length;
+  segments.push({
+    index:n,
+    p1:{ world:{ y:lastY(), z:n*SEG_LEN     }, camera:{}, screen:{} },
+    p2:{ world:{ y:y,       z:(n+1)*SEG_LEN }, camera:{}, screen:{} },
+    curve,
+    props:[], cars:[],
+    color: Math.floor(n/RUMBLE_LEN) % 2 ? COLORS.dark : COLORS.light,
+  });
+}
+
+const easeIn  = (a,b,p) => a + (b-a)*Math.pow(p,2);
+const easeOut = (a,b,p) => a + (b-a)*(1-Math.pow(1-p,2));
+const easeInOut=(a,b,p) => a + (b-a)*(-Math.cos(p*Math.PI)/2 + 0.5);
+
+function addRoad(enter, hold, leave, curve, height){
+  const startY = lastY(), endY = startY + height*SEG_LEN;
+  const total = enter + hold + leave;
+  for(let i=0;i<enter;i++) addSegment(easeIn(0,curve,i/enter),   easeInOut(startY,endY,i/total));
+  for(let i=0;i<hold;i++)  addSegment(curve,                     easeInOut(startY,endY,(enter+i)/total));
+  for(let i=0;i<leave;i++) addSegment(easeInOut(curve,0,i/leave),easeInOut(startY,endY,(enter+hold+i)/total));
+}
+
+/* Straights, curves and hills, sized so a lap is a couple of minutes in
+   a scissor lift and well under one in a box truck. */
+function buildTrack(){
+  segments = [];
+  const S=[25,50,100], C=[2,4,6], Hh=[20,40,60];
+  addRoad(S[2],S[2],S[2], 0, 0);            // start straight
+  addRoad(S[1],S[1],S[1], C[1], Hh[0]);     // right, uphill
+  addRoad(S[0],S[0],S[0], -C[2], 0);        // hard left
+  addRoad(S[1],S[1],S[1], 0, -Hh[1]);       // downhill straight
+  addRoad(S[0],S[1],S[0], C[2], 0);         // hard right
+  addRoad(S[1],S[1],S[1], -C[0], Hh[1]);    // long easy left, climbing
+  addRoad(S[0],S[0],S[0], C[0], 0);
+  addRoad(S[1],S[2],S[1], -C[1], -Hh[0]);   // sweeping left down
+  addRoad(S[0],S[0],S[0], C[2], Hh[2]);     // late right, steep
+  addRoad(S[1],S[1],S[1], 0, -Hh[2]);       // drop back to level
+  addRoad(S[0],S[0],S[0], -C[1], 0);
+  addRoad(S[2],S[2],S[2], 0, 0);            // run to the line
+
+  // Level the last stretch so the loop doesn't step at the start line.
+  const tail = segments.length - 1;
+  for(let i=0;i<80;i++){
+    const s = segments[tail-i];
+    if(!s) break;
+    const p = i/80;
+    s.p2.world.y *= p; s.p1.world.y *= p;
+  }
+
+  for(let i=0;i<RUMBLE_LEN*2;i++) segments[i].color = COLORS.start;
+  for(let i=0;i<RUMBLE_LEN;i++)   segments[segments.length-1-i].color = COLORS.start;
+
+  trackLength = segments.length * SEG_LEN;
+  scatterProps();
+  placeTraffic();
+}
+
+const segAt = z => segments[Math.floor(z/SEG_LEN) % segments.length];
+
+/* Roadside dressing, all of it stuff that lives in a yard. */
+const PROPS = [
+  { k:'cone',   w:60,  h:90  },
+  { k:'barrel', w:110, h:150 },
+  { k:'pallet', w:200, h:70  },
+  { k:'case',   w:190, h:170 },
+  { k:'sign',   w:170, h:260 },
+];
+function scatterProps(){
+  for(let n=30;n<segments.length-40;n+=4){
+    if(Math.random() > 0.55) continue;
+    const p = PROPS[Math.floor(Math.random()*PROPS.length)];
+    const side = Math.random() < 0.5 ? -1 : 1;
+    const off  = side * (1.25 + Math.random()*2.2);
+    segments[n].props.push({ ...p, offset:off });
+  }
+  // A gate of cones on the approach to the line, so the finish reads.
+  for(let n=segments.length-26;n<segments.length-6;n+=3){
+    segments[n].props.push({ k:'cone', w:60, h:90, offset:-1.06 });
+    segments[n].props.push({ k:'cone', w:60, h:90, offset: 1.06 });
+  }
+}
+
+/* Yard traffic — the same rigs, ambling along, there to be overtaken. */
+let traffic = [];
+function placeTraffic(){
+  traffic = [];
+  const count = 14;
+  for(let i=0;i<count;i++){
+    const rig = RIGS[Math.floor(Math.random()*RIGS.length)];
+    traffic.push({
+      rig,
+      offset: (Math.random()*1.4 - 0.7),
+      z: Math.floor(Math.random()*segments.length) * SEG_LEN,
+      speed: 2200 + Math.random()*2600,
+    });
+  }
+}
+
+/* ── projection ───────────────────────────────────────────────────
+   The whole illusion. A point in world space is moved into camera
+   space, then divided by its depth — near things land low and wide on
+   the screen, far things converge on the horizon. */
+function project(p, camX, camY, camZ, depth, width, height, roadWidth){
+  p.camera.x = (p.world.x || 0) - camX;
+  p.camera.y = (p.world.y || 0) - camY;
+  p.camera.z = (p.world.z || 0) - camZ;
+  p.screen.scale = depth / (p.camera.z || 1);
+  p.screen.x = Math.round(width/2  + p.screen.scale * p.camera.x * width/2);
+  p.screen.y = Math.round(height/2 - p.screen.scale * p.camera.y * height/2);
+  p.screen.w = Math.round(          p.screen.scale * roadWidth  * width/2);
+}
+
+function polygon(x1,y1,x2,y2,x3,y3,x4,y4,color){
+  x.fillStyle = color;
+  x.beginPath();
+  x.moveTo(x1,y1); x.lineTo(x2,y2); x.lineTo(x3,y3); x.lineTo(x4,y4);
+  x.closePath(); x.fill();
+}
+
+function drawSegment(width, lanes, x1,y1,w1, x2,y2,w2, color){
+  const r1 = w1/Math.max(6, 2*lanes), r2 = w2/Math.max(6, 2*lanes);
+  const l1 = w1/Math.max(32, 8*lanes), l2 = w2/Math.max(32, 8*lanes);
+
+  x.fillStyle = color.grass;
+  x.fillRect(0, y2, width, y1-y2);
+
+  polygon(x1-w1-r1,y1, x1-w1,y1, x2-w2,y2, x2-w2-r2,y2, color.rumble);
+  polygon(x1+w1+r1,y1, x1+w1,y1, x2+w2,y2, x2+w2+r2,y2, color.rumble);
+  polygon(x1-w1,y1, x1+w1,y1, x2+w2,y2, x2-w2,y2, color.road);
+
+  if(color.lane){
+    const lw1 = w1*2/lanes, lw2 = w2*2/lanes;
+    let lx1 = x1 - w1 + lw1, lx2 = x2 - w2 + lw2;
+    for(let i=1;i<lanes;i++, lx1+=lw1, lx2+=lw2)
+      polygon(lx1-l1,y1, lx1+l1,y1, lx2+l2,y2, lx2-l2,y2, color.lane);
+  }
+}
+
+/* ── sprites ──────────────────────────────────────────────────────
+   Drawn as flat shapes rather than images so the whole game stays one
+   file with nothing to fetch. */
+function drawProp(p, scale, destX, destY, clipY){
+  const w = p.w * scale * W/2, h = p.h * scale * W/2;
+  const dx = destX - w/2, dy = destY - h;
+  if(h < 1) return;
+  const clipH = clipY ? Math.max(0, dy + h - clipY) : 0;
+  if(clipH >= h) return;
+  x.save();
+  x.beginPath(); x.rect(dx, dy, w, h - clipH); x.clip();
+  switch(p.k){
+    case 'cone':
+      x.fillStyle='#FF6A3D'; x.beginPath();
+      x.moveTo(dx+w/2,dy); x.lineTo(dx+w,dy+h); x.lineTo(dx,dy+h); x.closePath(); x.fill();
+      x.fillStyle='#F2F2F2'; x.fillRect(dx+w*0.15, dy+h*0.55, w*0.7, h*0.16);
+      break;
+    case 'barrel':
+      x.fillStyle='#D8452F'; x.fillRect(dx,dy,w,h);
+      x.fillStyle='#F2F2F2'; x.fillRect(dx,dy+h*0.3,w,h*0.14);
+      x.fillStyle='#F2F2F2'; x.fillRect(dx,dy+h*0.62,w,h*0.14);
+      break;
+    case 'pallet':
+      x.fillStyle='#9A6B3C'; x.fillRect(dx,dy,w,h);
+      x.fillStyle='#7A5330';
+      for(let i=0;i<3;i++) x.fillRect(dx+w*(0.1+i*0.32), dy, w*0.12, h);
+      break;
+    case 'case':
+      x.fillStyle='#1D232B'; x.fillRect(dx,dy,w,h);
+      x.fillStyle='#8B94A3'; x.fillRect(dx,dy,w,h*0.1);
+      x.fillStyle='#3FBF8F'; x.fillRect(dx+w*0.3,dy+h*0.4,w*0.4,h*0.2);
+      break;
+    case 'sign':
+      x.fillStyle='#8B94A3'; x.fillRect(dx+w*0.44, dy+h*0.35, w*0.12, h*0.65);
+      x.fillStyle='#E8E337'; x.fillRect(dx, dy, w, h*0.4);
+      x.fillStyle='#151A21'; x.fillRect(dx+w*0.16, dy+h*0.14, w*0.68, h*0.12);
+      break;
+  }
+  x.restore();
+}
+
+/* A rig, seen from behind. Same routine draws the traffic and the thing
+   you are driving — only the scale changes. */
+function drawRig(rig, scale, destX, destY, clipY, steer){
+  const w = 1500 * rig.width * scale * W/2;
+  const h = w * (rig.tall ? 0.95 : rig.deck ? 0.78 : 0.66);
+  if(w < 1.5) return;
+  const dx = destX - w/2, dy = destY - h;
+  const clipH = clipY ? Math.max(0, dy + h - clipY) : 0;
+  if(clipH >= h) return;
+
+  x.save();
+  // The clip reaches above the body: a forklift mast and a scissor platform are
+  // both drawn over the roofline and were being cut off entirely.
+  x.beginPath(); x.rect(dx - w*0.1, dy - h*0.42, w*1.2, h*0.42 + h - clipH); x.clip();
+
+  const tyre = h*0.24, tw = w*0.19;
+  x.fillStyle='#12161C';
+  x.fillRect(dx-w*0.02, dy+h-tyre, tw, tyre);
+  x.fillRect(dx+w-tw+w*0.02, dy+h-tyre, tw, tyre);
+
+  x.fillStyle = rig.body;
+  x.fillRect(dx+w*0.06, dy+h*0.30, w*0.88, h*0.60);
+  x.fillStyle = rig.roof;
+  x.fillRect(dx+w*0.14, dy+h*0.05, w*0.72, h*0.30);
+
+  // Rear window / shutter, so it reads as the back of a vehicle.
+  x.fillStyle='#0E1218';
+  x.fillRect(dx+w*0.20, dy+h*0.12, w*0.60, h*0.17);
+  x.fillStyle='rgba(255,255,255,.10)';
+  x.fillRect(dx+w*0.10, dy+h*0.36, w*0.80, h*0.10);
+
+  x.fillStyle='#FF4D3D';
+  x.fillRect(dx+w*0.08, dy+h*0.66, w*0.12, h*0.10);
+  x.fillRect(dx+w*0.80, dy+h*0.66, w*0.12, h*0.10);
+
+  if(rig.mast){                       // forklift mast, above the roof
+    x.fillStyle='#5A6472';
+    x.fillRect(dx+w*0.30, dy-h*0.30, w*0.08, h*0.36);
+    x.fillRect(dx+w*0.62, dy-h*0.30, w*0.08, h*0.36);
+  }
+  if(rig.deck){                       // scissor platform railing
+    x.fillStyle='#5A6472';
+    x.fillRect(dx+w*0.04, dy-h*0.26, w*0.92, h*0.06);
+    x.fillRect(dx+w*0.04, dy-h*0.26, w*0.05, h*0.30);
+    x.fillRect(dx+w*0.91, dy-h*0.26, w*0.05, h*0.30);
+  }
+  if(steer){                          // lean into the corner
+    x.fillStyle='rgba(0,0,0,.18)';
+    x.fillRect(steer>0?dx:dx+w*0.7, dy+h*0.30, w*0.3, h*0.60);
+  }
+  x.restore();
+}
+
+/* ── state ───────────────────────────────────────────────────────── */
+let mode = 'select';        // select | countdown | racing | done
+let rig  = RIGS[2];
+let pick = 2;
+
+let position=0, speed=0, playerX=0, steerHold=0;
+let lapTime=0, countdown=3, finished=null, crashT=0;
+let best = {};              // per-rig personal best, from localStorage
+
+const BEST_KEY='harvest:outrun:best:v1';
+try{ best = JSON.parse(localStorage.getItem(BEST_KEY)||'{}') || {}; }catch(e){ best={}; }
+function saveBest(){ try{ localStorage.setItem(BEST_KEY, JSON.stringify(best)); }catch(e){} }
+
+const fmt = t => {
+  if(t==null || !isFinite(t)) return '—';
+  const m=Math.floor(t/60), s=t-m*60;
+  return (m? m+':' : '') + (m? String(Math.floor(s)).padStart(2,'0') : Math.floor(s))
+       + '.' + String(Math.floor((s%1)*100)).padStart(2,'0');
+};
+const mph = () => Math.round(speed/70);
+
+/* ── input ───────────────────────────────────────────────────────── */
+const key = { left:false, right:false, gas:false, brake:false };
+function setKey(e, down){
+  const k=e.key;
+  if(k==='ArrowLeft'||k==='a'||k==='A')  key.left=down;
+  else if(k==='ArrowRight'||k==='d'||k==='D') key.right=down;
+  else if(k==='ArrowUp'||k==='w'||k==='W'||k===' ') key.gas=down;
+  else if(k==='ArrowDown'||k==='s'||k==='S') key.brake=down;
+  else return;
+  e.preventDefault();
+}
+addEventListener('keydown', e=>{
+  // While a name is being typed, the name entry owns the keyboard. Without
+  // this, "R" hits the reset shortcut below and throws the run away
+  // mid-name — TYLER resets on the fifth letter — and Enter goes back to the
+  // yard instead of submitting the time.
+  if(mode==='done' && qualified) return;
+
+  if(e.key==='Enter'){ if(mode==='select') start(); else if(mode==='done') reset('select'); return; }
+  if(e.key==='r'||e.key==='R'){ reset('select'); return; }
+  if(mode==='select'){
+    if(e.key==='ArrowLeft')  { pick=(pick+RIGS.length-1)%RIGS.length; e.preventDefault(); }
+    if(e.key==='ArrowRight') { pick=(pick+1)%RIGS.length; e.preventDefault(); }
+    return;
+  }
+  setKey(e,true);
+});
+addEventListener('keyup', e=>setKey(e,false));
+
+function hold(el, on, off){
+  const d=e=>{e.preventDefault();on();}, u=e=>{e.preventDefault();off();};
+  el.addEventListener('touchstart',d,{passive:false});
+  el.addEventListener('touchend',u); el.addEventListener('touchcancel',u);
+  el.addEventListener('mousedown',d); el.addEventListener('mouseup',u);
+  el.addEventListener('mouseleave',u);
+}
+hold(document.getElementById('bL'), ()=>{ if(mode==='select'){pick=(pick+RIGS.length-1)%RIGS.length;} key.left=true; },  ()=>key.left=false);
+hold(document.getElementById('bR'), ()=>{ if(mode==='select'){pick=(pick+1)%RIGS.length;} key.right=true; }, ()=>key.right=false);
+hold(document.getElementById('bB'), ()=>key.brake=true, ()=>key.brake=false);
+hold(document.getElementById('bG'), ()=>{
+  if(mode==='select') start(); else if(mode==='done') reset('select'); else key.gas=true;
+}, ()=>key.gas=false);
+cv.addEventListener('click', ()=>{ if(mode==='select') start(); else if(mode==='done') reset('select'); });
+
+/* ── run control ─────────────────────────────────────────────────── */
+function reset(to){
+  mode=to; position=0; speed=0; playerX=0; lapTime=0; countdown=3;
+  finished=null; crashT=0; qualified=false; nameBuf='';
+  key.left=key.right=key.gas=key.brake=false;
+  if(to==='select') placeTraffic();
+}
+function start(){
+  rig = RIGS[pick];
+  reset('countdown');
+  buildTrack();
+  boardLoad();
+}
+
+/* ── update ──────────────────────────────────────────────────────── */
+function update(dt){
+  if(mode==='countdown'){
+    countdown -= dt;
+    if(countdown <= 0){ mode='racing'; countdown=0; }
+    return;
+  }
+  if(mode!=='racing') return;
+
+  lapTime += dt;
+
+  const seg = segAt(position);
+  const speedPct = speed / rig.maxSpeed;
+  const dx = dt * 2 * speedPct;
+
+  if(crashT > 0){ crashT -= dt; }
+  else {
+    if(key.left)  { playerX -= dx; steerHold = -1; }
+    else if(key.right){ playerX += dx; steerHold = 1; }
+    else steerHold = 0;
+  }
+
+  // Pushed wide on a curve. Low grip means a wider push for the same corner.
+  playerX -= dx * speedPct * seg.curve * CENTRIFUGAL * (1 - rig.grip);
+
+  if(key.gas && crashT<=0) speed += rig.accel * dt * 1000;
+  else if(key.brake)       speed += rig.brake * dt * 1000;
+  else                     speed -= 1.0 * dt * 1000;
+
+  // Off the tarmac: each rig loses a different amount of its top speed.
+  const off = Math.abs(playerX) > 1;
+  if(off && speed > rig.maxSpeed * rig.offRoad){
+    speed -= 3.2 * dt * 1000;
+    playerX += (playerX>0?-1:1) * dt * 0.35;
+  }
+
+  speed = Math.max(0, Math.min(speed, rig.maxSpeed));
+  playerX = Math.max(-2.4, Math.min(2.4, playerX));
+
+  // Traffic, and running into it.
+  for(const t of traffic){
+    t.z = (t.z + t.speed * dt) % trackLength;
+    const rel = (t.z - position + trackLength) % trackLength;
+    if(rel < SEG_LEN*2.2 && rel > -SEG_LEN && crashT<=0 && speed > 1200){
+      if(Math.abs(playerX - t.offset) < (rig.width + t.rig.width)*0.55){
+        speed = Math.min(speed, t.speed) * 0.35;
+        crashT = 0.7;
+        playerX += (playerX > t.offset ? 1 : -1) * 0.35;
+      }
+    }
+  }
+
+  // And into the scenery.
+  if(crashT<=0 && off){
+    for(const p of seg.props){
+      if(Math.abs(playerX - p.offset) < 0.30 && Math.abs(playerX) > 1){
+        speed *= 0.55; crashT = 0.5; break;
+      }
+    }
+  }
+
+  const before = position;
+  position = (position + speed * dt) % trackLength;
+  if(position < before){            // crossed the line
+    finished = lapTime;
+    mode = 'done';
+    const b = best[rig.id];
+    if(b==null || finished < b){ best[rig.id]=finished; saveBest(); }
+    onFinish(finished);
+  }
+}
+
+/* ── render ──────────────────────────────────────────────────────── */
+function skyAndGround(){
+  const g = x.createLinearGradient(0,0,0,H*0.55);
+  g.addColorStop(0,'#1B3C6B'); g.addColorStop(1,'#5C86C0');
+  x.fillStyle=g; x.fillRect(0,0,W,H*0.55);
+  x.fillStyle='#2C3A26'; x.fillRect(0,H*0.55,W,H*0.45);
+
+  // A low warehouse skyline, so the horizon isn't a bare line.
+  x.fillStyle='#1A2430';
+  const base = H*0.55;
+  for(let i=0;i<14;i++){
+    const bw = W/14, bx = i*bw;
+    const bh = 18 + ((i*37)%5)*9;
+    x.fillRect(bx, base-bh, bw-3, bh);
+  }
+}
+
+function render(){
+  const baseSeg = segAt(position);
+  const basePct = (position % SEG_LEN) / SEG_LEN;
+  const playerY = baseSeg.p1.world.y + (baseSeg.p2.world.y - baseSeg.p1.world.y) * basePct;
+
+  let maxY = H, dxx = -(baseSeg.curve * basePct), xx = 0;
+
+  skyAndGround();
+
+  // Far to near for the road itself.
+  const drawn = [];
+  for(let n=0;n<DRAW_DIST;n++){
+    const seg = segments[(baseSeg.index + n) % segments.length];
+    const looped = seg.index < baseSeg.index;
+    seg.looped = looped;
+
+    project(seg.p1, playerX*ROAD_W - xx, playerY + CAM_HEIGHT,
+            position - (looped ? trackLength : 0), CAM_DEPTH, W, H, ROAD_W);
+    project(seg.p2, playerX*ROAD_W - xx - dxx, playerY + CAM_HEIGHT,
+            position - (looped ? trackLength : 0), CAM_DEPTH, W, H, ROAD_W);
+
+    xx  += dxx;
+    dxx += seg.curve;
+
+    seg.clip = maxY;
+    if(seg.p1.camera.z <= CAM_DEPTH || seg.p2.screen.y >= seg.p1.screen.y || seg.p2.screen.y >= maxY) continue;
+
+    drawSegment(W, 3,
+      seg.p1.screen.x, seg.p1.screen.y, seg.p1.screen.w,
+      seg.p2.screen.x, seg.p2.screen.y, seg.p2.screen.w,
+      seg.color);
+
+    maxY = seg.p2.screen.y;
+    drawn.push(seg);
+  }
+
+  // Near to far for sprites, so closer things overlap what's behind them.
+  for(let n=drawn.length-1;n>=0;n--){
+    const seg = drawn[n];
+    for(const p of seg.props){
+      const sc = seg.p1.screen.scale;
+      const sx = seg.p1.screen.x + sc * p.offset * ROAD_W * W/2;
+      drawProp(p, sc, sx, seg.p1.screen.y, seg.clip);
+    }
+    for(const t of traffic){
+      if(segAt(t.z) !== seg) continue;
+      const sc = seg.p1.screen.scale;
+      const sx = seg.p1.screen.x + sc * t.offset * ROAD_W * W/2;
+      drawRig(t.rig, sc, sx, seg.p1.screen.y, seg.clip, 0);
+    }
+  }
+
+  // The rig you're in, always the same size at the bottom of the frame.
+  // Fixed size, the way the cabinet did it — the rig you are in never gets
+  // further away. Tuned so a van fills about a quarter of the width; deriving
+  // it from CAM_DEPTH gave a sprite as wide as the whole canvas.
+  const bounce = (speed/rig.maxSpeed) * Math.sin(performance.now()/60) * 2;
+  drawRig(rig, 0.00055, W/2 + (crashT>0 ? Math.sin(performance.now()/28)*14 : 0),
+          H - 18 + bounce, 0, steerHold);
+}
+
+/* ── HUD and screens ─────────────────────────────────────────────── */
+const $ = id => document.getElementById(id);
+function hud(){
+  $('mRig').textContent  = mode==='select' ? RIGS[pick].name : rig.name;
+  $('mLap').textContent  = mode==='racing'||mode==='done' ? fmt(mode==='done'?finished:lapTime) : '—';
+  $('mBest').textContent = fmt(best[(mode==='select'?RIGS[pick]:rig).id]);
+  $('mSpd').textContent  = mode==='racing' ? mph()+' mph' : '0';
+}
+
+function centre(txt, y, size, color, font){ textAt(txt, W/2, y, size, color, font); }
+
+/** Centred on an arbitrary x — the rig cards each need their own. */
+function textAt(txt, cx, y, size, color, font){
+  x.textAlign='center';
+  x.fillStyle=color; x.font=(font||'bold ')+size+"px 'IBM Plex Mono',monospace";
+  x.fillText(txt, cx, y);
+  x.textAlign='left';
+}
+
+function selectScreen(){
+  skyAndGround();
+  x.fillStyle='rgba(10,12,16,.82)'; x.fillRect(0,0,W,H);
+  centre('HARVEST OUT RUN', 78, 36, '#E8E337', 'bold ');
+  centre('One lap of the yard. Pick your rig.', 112, 15, '#8B94A3', '');
+
+  const cw = W/4;
+  RIGS.forEach((r,i)=>{
+    const cx = cw*i + cw/2, on = i===pick;
+    x.fillStyle = on ? 'rgba(232,227,55,.10)' : 'rgba(255,255,255,.03)';
+    x.fillRect(cw*i+10, 150, cw-20, 300);
+    x.strokeStyle = on ? '#E8E337' : '#39424F'; x.lineWidth = on?3:1;
+    x.strokeRect(cw*i+10, 150, cw-20, 300);
+
+    drawRig(r, 0.00030, cx, 330, 0, 0);
+
+    textAt(r.name, cx, 360, 15, on?'#E8E337':'#D8DDE4', 'bold ');
+    textAt(r.tag,  cx, 380, 11, '#8B94A3', '');
+    const b = best[r.id];
+    textAt(b?('BEST '+fmt(b)):'no time yet', cx, 402, 11, b?'#3FBF8F':'#39424F', '');
+    // Rough shape of how each one drives.
+    bar(cw*i+30, 418, cw-60, 'TOP',  r.maxSpeed/13600, on);
+    bar(cw*i+30, 430, cw-60, 'GRIP', r.grip/0.62,      on);
+  });
+
+  centre('← →  choose      ENTER / GO  start', H-38, 14, '#8B94A3', 'bold ');
+  centre('Off the tarmac is slow. So is hitting anything.', H-18, 11, '#39424F', '');
+}
+function bar(bx,by,bw,label,pct,on){
+  x.fillStyle='#39424F'; x.font="9px 'IBM Plex Mono',monospace"; x.textAlign='left';
+  x.fillText(label, bx, by+8);
+  const tx = bx+34, tw = bw-34;
+  x.fillStyle='rgba(255,255,255,.08)'; x.fillRect(tx,by+1,tw,7);
+  x.fillStyle= on ? '#E8E337' : '#5A6472';
+  x.fillRect(tx,by+1,tw*Math.max(0.06,Math.min(1,pct)),7);
+}
+
+function countdownScreen(){
+  const n = Math.ceil(countdown);
+  centre(n>0?String(n):'GO', H/2, 96, n>0?'#E8E337':'#3FBF8F', 'bold ');
+}
+
+function doneScreen(){
+  x.fillStyle='rgba(10,12,16,.86)'; x.fillRect(0,0,W,H);
+  centre('LAP COMPLETE', 62, 30, '#E8E337', 'bold ');
+  centre(rig.name, 88, 13, '#8B94A3', '');
+  centre(fmt(finished), 140, 54, '#D8DDE4', 'bold ');
+  const b = best[rig.id];
+  if(b!=null && Math.abs(b-finished)<1e-9) centre('personal best', 166, 12, '#3FBF8F', '');
+  else if(b!=null) centre('your best '+fmt(b), 166, 12, '#8B94A3', '');
+  drawBoard(200);
+  if(qualified) namePrompt();
+  else centre('ENTER / GO  —  back to the yard', H-26, 13, '#8B94A3', 'bold ');
+}
+
+/* ── LEADERBOARD ──────────────────────────────────────────────────
+   Same shape as Soundcheck's: a Netlify Function if one is deployed,
+   otherwise this browser's own storage. Nothing in here may throw — a
+   dead board must never take the game with it.
+
+   Times are per rig. A box truck will always beat a scissor lift, so a
+   single combined board would only ever be a box truck board.
+   ───────────────────────────────────────────────────────────────── */
+const API='/api/times';
+const LOCAL_KEY='harvest:outrun:board:v1';
+let board=[], boardMode='none', boardState='ready', qualified=false, nameBuf='';
+
+const canFetch = () => typeof fetch==='function' && /^https?:/.test(location.protocol);
+
+const cleanBoard = a => (Array.isArray(a)?a:[])
+  .filter(e=>e && typeof e.time==='number' && isFinite(e.time) && e.time>0)
+  .map(e=>({ name:String(e.name||'ANON').slice(0,12), time:Number(e.time),
+             rig:String(e.rig||'van').slice(0,12), when:Number(e.when)||0 }))
+  .sort((a,b)=>a.time-b.time);
+
+const forRig = a => a.filter(e=>e.rig===rig.id).slice(0,10);
+
+function localBoard(){
+  try{ return cleanBoard(JSON.parse(localStorage.getItem(LOCAL_KEY)||'[]')); }
+  catch(e){ return []; }
+}
+function localSave(list){
+  try{ localStorage.setItem(LOCAL_KEY, JSON.stringify(list.slice(0,80))); }catch(e){}
+}
+
+async function boardLoad(){
+  boardState='loading';
+  if(canFetch()){
+    try{
+      const r = await fetch(API,{method:'GET'});
+      if(r.ok){ board=cleanBoard(await r.json()); boardMode='server'; boardState='ready'; return; }
+    }catch(e){ /* no function deployed — fall through */ }
+  }
+  board=localBoard(); boardMode='local'; boardState='ready';
+}
+
+async function boardPost(entry){
+  if(boardMode==='server'){
+    try{
+      const r = await fetch(API,{ method:'POST', headers:{'Content-Type':'application/json'},
+                                  body:JSON.stringify(entry) });
+      if(r.ok){ board=cleanBoard(await r.json()); return; }
+    }catch(e){ /* fall through to local */ }
+  }
+  const list = cleanBoard([...localBoard(), entry]);
+  localSave(list); board=list; boardMode = boardMode==='server' ? 'server' : 'local';
+}
+
+function onFinish(t){
+  const mine = forRig(board);
+  qualified = mine.length < 10 || t < mine[mine.length-1].time;
+  nameBuf = '';
+  if(!qualified) return;
+}
+
+function drawBoard(cy){
+  centre(boardMode==='server' ? 'BEST LAPS — LIVE' : 'BEST LAPS — THIS BROWSER ONLY',
+         cy, 11, '#8B94A3', 'bold ');
+  centre(rig.name, cy+14, 9, '#39424F', '');
+  if(boardState==='loading'){ centre('loading…', cy+34, 10, '#39424F', ''); return; }
+  const mine = forRig(board);
+  if(!mine.length){ centre('no times yet — be the first', cy+34, 10, '#39424F', ''); return; }
+  x.font="10px 'IBM Plex Mono',monospace";
+  mine.forEach((e,i)=>{
+    const yy = cy+34+i*13;
+    const isMe = qualified && e.name===(nameBuf.trim()||'ANON') && Math.abs(e.time-finished)<1e-9;
+    x.fillStyle = isMe ? '#E8E337' : (i<3 ? '#3FBF8F' : '#8B94A3');
+    x.textAlign='right'; x.fillText((i+1)+'.', W/2-104, yy);
+    x.textAlign='left';  x.fillText(e.name, W/2-94, yy);
+    x.textAlign='right'; x.fillText(fmt(e.time), W/2+104, yy);
+  });
+  x.textAlign='left';
+}
+
+/* Name entry, typed straight into the canvas — no DOM input to style. */
+function namePrompt(){
+  centre('TOP TEN — TYPE YOUR NAME, THEN ENTER', H-64, 12, '#E8E337', 'bold ');
+  const shown = (nameBuf || '').padEnd(3,'_').slice(0,12);
+  centre(shown, H-34, 26, '#D8DDE4', 'bold ');
+}
+addEventListener('keydown', e=>{
+  if(mode!=='done' || !qualified) return;
+  if(e.key==='Enter'){
+    const entry = { name:(nameBuf.trim()||'ANON').toUpperCase().slice(0,12),
+                    time:finished, rig:rig.id, when:Date.now() };
+    qualified=false;
+    boardPost(entry);
+    e.preventDefault(); e.stopImmediatePropagation();
+    return;
+  }
+  if(e.key==='Backspace'){ nameBuf=nameBuf.slice(0,-1); e.preventDefault(); return; }
+  if(e.key.length===1 && /[A-Za-z0-9 .-]/.test(e.key) && nameBuf.length<12){
+    nameBuf += e.key.toUpperCase();
+  }
+}, true);
+
+/* ── loop ────────────────────────────────────────────────────────── */
+let last = performance.now();
+function frame(now){
+  const dt = Math.min(0.05, (now-last)/1000);
+  last = now;
+
+  if(mode==='select'){ selectScreen(); }
+  else {
+    update(dt);
+    render();
+    if(mode==='countdown') countdownScreen();
+    if(mode==='done') doneScreen();
+  }
+  hud();
+  requestAnimationFrame(frame);
+}
+
+buildTrack();
+boardLoad();
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

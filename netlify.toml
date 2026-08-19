@@ -1,0 +1,11 @@
+[build]
+  publish = "."
+  functions = "netlify/functions"
+
+# The function declares its own route via `export const config = { path: '/api/times' }`,
+# so no redirect is needed for the API.
+
+[[headers]]
+  for = "/api/times"
+  [headers.values]
+    Cache-Control = "no-store"

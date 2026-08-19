@@ -1,0 +1,10 @@
+{
+  "name": "harvest-out-run",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Harvest Out Run — a time trial around the yard in the things we actually drive",
+  "dependencies": {
+    "@netlify/blobs": "^8.1.0"
+  }
+}
