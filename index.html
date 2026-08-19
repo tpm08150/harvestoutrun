@@ -39,13 +39,34 @@
     font-size:10.5px;text-transform:uppercase;letter-spacing:1.2px;opacity:.65}
   .legend span b{color:var(--xlr)}
 
-  .touch{display:none;gap:8px;margin-top:10px}
+  /* Two pads with a gap down the middle: steering under the left thumb, pedals
+     under the right. One row of four put a pedal under each thumb and a steering
+     arrow at each outside edge, which is the wrong way round for holding a
+     phone. */
+  .touch{display:none;gap:22px;margin-top:10px}
+  .touch .pad{display:flex;gap:8px;flex:1}
   .touch button{flex:1;padding:16px 0;background:var(--deck);color:var(--truss);
     border:2px solid var(--truss);font-family:'Bungee',cursive;
     font-size:clamp(10px,3vw,14px);white-space:nowrap;
     border-radius:2px;user-select:none;-webkit-user-select:none}
   .touch button:active{background:var(--tape);color:var(--house)}
   @media(hover:none) and (pointer:coarse){.touch{display:flex}}
+  /* The old name entry was typed straight onto the canvas, which meant a phone
+     could never enter one at all — nothing brings the keyboard up. A real input
+     does, and focusing it is what opens the keyboard. */
+  .nameover{position:fixed;inset:0;background:rgba(10,12,16,.86);
+    display:flex;align-items:center;justify-content:center;padding:20px;z-index:20}
+  .nameover[hidden]{display:none}
+  .namebox{background:var(--deck);border:2px solid var(--tape);padding:20px;
+    display:flex;flex-direction:column;gap:12px;width:min(460px,100%)}
+  .nametitle{font-family:'Bungee',cursive;font-size:13px;color:var(--tape);
+    letter-spacing:1px;text-align:center}
+  #nameIn{background:var(--house);border:2px solid var(--truss);color:var(--tape);
+    font-family:'Bungee',cursive;font-size:30px;text-align:center;padding:12px 8px;
+    letter-spacing:6px;text-transform:uppercase;width:100%}
+  #nameSave{padding:16px;background:var(--tape);color:var(--house);border:0;
+    font-family:'Bungee',cursive;font-size:15px;cursor:pointer}
+
   @media (prefers-reduced-motion:reduce){*{animation:none!important}}
 </style>
 </head>
@@ -76,8 +97,18 @@
     <span><b>One lap. Fastest time wins.</b></span>
   </div>
 
+  <div class="nameover" id="nameOver" hidden>
+    <form class="namebox" id="nameForm">
+      <p class="nametitle">TOP TEN — ENTER YOUR NAME</p>
+      <input id="nameIn" maxlength="12" autocomplete="off" autocapitalize="characters"
+             autocorrect="off" spellcheck="false" inputmode="text">
+      <button type="submit" id="nameSave">SAVE</button>
+    </form>
+  </div>
+
   <div class="touch">
-    <button id="bL">◀</button><button id="bB">BRAKE</button><button id="bG">GO</button><button id="bR">▶</button>
+    <div class="pad"><button id="bL">◀</button><button id="bR">▶</button></div>
+    <div class="pad"><button id="bB">BRAKE</button><button id="bG">GO</button></div>
   </div>
 </div>
 <script>
@@ -492,6 +523,7 @@ function reset(to){
   finished=null; crashT=0; qualified=false; nameBuf='';
   worldY=0; vy=0; airborne=false; climb=0; landedHard=0; airT=0;
   key.left=key.right=key.gas=key.brake=false;
+  if(typeof hideNameEntry === 'function') hideNameEntry();
   if(to==='select') placeTraffic();
 }
 function start(){
@@ -830,8 +862,7 @@ function doneScreen(){
   if(b!=null && Math.abs(b-finished)<1e-9) centre('personal best', 166, 12, '#3FBF8F', '');
   else if(b!=null) centre('your best '+fmt(b), 166, 12, '#8B94A3', '');
   drawBoard(200);
-  if(qualified) namePrompt();
-  else centre('ENTER / GO  —  back to the yard', H-26, 13, '#8B94A3', 'bold ');
+  if(!qualified) centre('ENTER / GO  —  back to the yard', H-26, 13, '#8B94A3', 'bold ');
 }
 
 /* ── LEADERBOARD ──────────────────────────────────────────────────
@@ -892,7 +923,34 @@ function onFinish(t){
   qualified = mine.length < 10 || t < mine[mine.length-1].time;
   nameBuf = '';
   if(!qualified) return;
+  showNameEntry();
 }
+
+const nameOver = document.getElementById('nameOver');
+const nameIn   = document.getElementById('nameIn');
+
+function showNameEntry(){
+  nameIn.value = lastName();
+  nameOver.hidden = false;
+  // The delay is for iOS, which ignores focus() called straight out of a
+  // non-user gesture. A frame later it takes.
+  setTimeout(()=>{ try{ nameIn.focus(); nameIn.select(); }catch(e){} }, 60);
+}
+function hideNameEntry(){ nameOver.hidden = true; try{ nameIn.blur(); }catch(e){} }
+
+/** Whatever they called themselves last time, so nobody types it twice. */
+const LAST_NAME='harvest:outrun:name';
+const lastName = () => { try{ return localStorage.getItem(LAST_NAME)||''; }catch(e){ return ''; } };
+
+document.getElementById('nameForm').addEventListener('submit', (e)=>{
+  e.preventDefault();
+  const name = (nameIn.value.trim() || 'ANON').toUpperCase().slice(0,12);
+  try{ localStorage.setItem(LAST_NAME, name); }catch(e){}
+  nameBuf = name;
+  qualified = false;
+  hideNameEntry();
+  boardPost({ name, time:finished, rig:rig.id, when:Date.now() });
+});
 
 function drawBoard(cy){
   centre(boardMode==='server' ? 'BEST LAPS — LIVE' : 'BEST LAPS — THIS BROWSER ONLY',
@@ -913,27 +971,8 @@ function drawBoard(cy){
   x.textAlign='left';
 }
 
-/* Name entry, typed straight into the canvas — no DOM input to style. */
-function namePrompt(){
-  centre('TOP TEN — TYPE YOUR NAME, THEN ENTER', H-64, 12, '#E8E337', 'bold ');
-  const shown = (nameBuf || '').padEnd(3,'_').slice(0,12);
-  centre(shown, H-34, 26, '#D8DDE4', 'bold ');
-}
-addEventListener('keydown', e=>{
-  if(mode!=='done' || !qualified) return;
-  if(e.key==='Enter'){
-    const entry = { name:(nameBuf.trim()||'ANON').toUpperCase().slice(0,12),
-                    time:finished, rig:rig.id, when:Date.now() };
-    qualified=false;
-    boardPost(entry);
-    e.preventDefault(); e.stopImmediatePropagation();
-    return;
-  }
-  if(e.key==='Backspace'){ nameBuf=nameBuf.slice(0,-1); e.preventDefault(); return; }
-  if(e.key.length===1 && /[A-Za-z0-9 .-]/.test(e.key) && nameBuf.length<12){
-    nameBuf += e.key.toUpperCase();
-  }
-}, true);
+/* Name entry lives in the HTML overlay above, not on the canvas — see
+   showNameEntry(). A canvas-typed name is unreachable on a phone. */
 
 /* ── loop ────────────────────────────────────────────────────────── */
 let last = performance.now();
