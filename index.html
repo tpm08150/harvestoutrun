@@ -71,6 +71,7 @@
     <span><b>ENTER</b> start / retry</span>
     <span><b>R</b> back to the yard</span>
     <span><b>Off the tarmac is slow</b> — and so is hitting anything</span>
+    <span><b>Lift for the tight ones</b> — leaning on it scrubs speed off</span>
     <span><b>Hit the big rise fast</b> — you'll catch air</span>
     <span><b>One lap. Fastest time wins.</b></span>
   </div>
@@ -103,19 +104,25 @@ const W  = cv.width, H = cv.height;
    reads like mph. grip is how well it resists being pushed wide on a
    curve — low grip is what makes the box truck a handful. */
 const RIGS = [
-  { id:'forklift', name:'FORKLIFT',    tag:'Slow, turns on a dime',
-    maxSpeed:8200,  accel:3.2, brake:-5.5, grip:0.62, offRoad:0.30, width:0.66,
+  { id:'forklift', name:'FORKLIFT',    tag:'Off the line first. Tops out early.',
+    maxSpeed:8200,  accel:4.4, brake:-5.5, grip:0.62, offRoad:0.30, width:0.66,
     body:'#E8A020', roof:'#C07800', mast:true },
-  { id:'scissor',  name:'SCISSOR LIFT', tag:'Barely legal on a track',
-    maxSpeed:6200,  accel:2.1, brake:-4.5, grip:0.30, offRoad:0.22, width:0.72,
+  { id:'scissor',  name:'SCISSOR LIFT', tag:'Leaps away, then gives up',
+    maxSpeed:6200,  accel:4.0, brake:-4.5, grip:0.30, offRoad:0.22, width:0.72,
     body:'#3FBF8F', roof:'#2A8C68', deck:true },
   { id:'van',      name:'SERVICE VAN',  tag:'The all-rounder',
-    maxSpeed:11800, accel:2.9, brake:-6.2, grip:0.52, offRoad:0.42, width:0.60,
+    maxSpeed:11800, accel:2.8, brake:-6.2, grip:0.52, offRoad:0.42, width:0.60,
     body:'#D8DDE4', roof:'#A9B2BD' },
-  { id:'boxtruck', name:'BOX TRUCK',    tag:'Fast. Not agile.',
-    maxSpeed:13600, accel:1.7, brake:-4.8, grip:0.34, offRoad:0.34, width:0.86,
+  { id:'boxtruck', name:'BOX TRUCK',    tag:'Fast flat out. Slow to build.',
+    maxSpeed:13600, accel:1.5, brake:-4.8, grip:0.34, offRoad:0.34, width:0.86,
     body:'#4E7FD0', roof:'#2F5AA8', tall:true },
 ];
+
+/* The best of each stat on the yard, so a full bar on the select screen means
+   "nothing here beats this" rather than a number picked out of the air. */
+const BEST_SPEED = Math.max(...RIGS.map(r=>r.maxSpeed));
+const BEST_ACCEL = Math.max(...RIGS.map(r=>r.accel));
+const BEST_GRIP  = Math.max(...RIGS.map(r=>r.grip));
 
 /* ── road geometry ───────────────────────────────────────────────── */
 const SEG_LEN    = 200;
@@ -127,6 +134,12 @@ const CAM_BACK   = 950;    // how far behind the rig the camera sits
 const FOV        = 100;
 const CAM_DEPTH  = 1 / Math.tan((FOV/2) * Math.PI/180);
 const CENTRIFUGAL= 0.32;
+// Cornering costs speed. Without this you hold the throttle down for the whole
+// lap, every rig sits at its top speed the whole way round, and acceleration
+// makes almost no difference to a lap time — which makes three of the four
+// stats decorative. Scrub is what turns a corner into a decision.
+const SCRUB_AT   = 0.55;   // how hard you have to be leaning before tyres give up
+const SCRUB      = 3.2;
 
 let segments = [];
 let trackLength = 0;
@@ -514,6 +527,12 @@ function update(dt){
   // None of it applies with the wheels off the ground.
   if(!airborne) playerX -= dx * speedPct * seg.curve * CENTRIFUGAL * (1 - rig.grip);
 
+  // Leaning on it: tight corner, high speed, and not much grip to spare.
+  if(!airborne){
+    const push = Math.abs(seg.curve) * speedPct * (1 - rig.grip);
+    if(push > SCRUB_AT) speed -= (push - SCRUB_AT) * SCRUB * dt * 1000;
+  }
+
   if(key.gas && crashT<=0) speed += rig.accel * dt * 1000;
   else if(key.brake)       speed += rig.brake * dt * 1000;
   else                     speed -= 1.0 * dt * 1000;
@@ -779,9 +798,10 @@ function selectScreen(){
     textAt(r.tag,  cx, 380, 11, '#8B94A3', '');
     const b = best[r.id];
     textAt(b?('BEST '+fmt(b)):'no time yet', cx, 402, 11, b?'#3FBF8F':'#39424F', '');
-    // Rough shape of how each one drives.
-    bar(cw*i+30, 418, cw-60, 'TOP',  r.maxSpeed/13600, on);
-    bar(cw*i+30, 430, cw-60, 'GRIP', r.grip/0.62,      on);
+    // Rough shape of how each one drives, each against the best on the yard.
+    bar(cw*i+30, 414, cw-60, 'TOP',   r.maxSpeed/BEST_SPEED, on);
+    bar(cw*i+30, 426, cw-60, 'ACCEL', r.accel/BEST_ACCEL,    on);
+    bar(cw*i+30, 438, cw-60, 'GRIP',  r.grip/BEST_GRIP,      on);
   });
 
   centre('← →  choose      ENTER / GO  start', H-38, 14, '#8B94A3', 'bold ');

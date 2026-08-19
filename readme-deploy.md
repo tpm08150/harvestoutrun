@@ -45,12 +45,19 @@ own competition.
 
 ## How it drives
 
-| Rig | Top speed | Grip | The idea |
-| --- | --- | --- | --- |
-| Forklift | lowest | highest | Turns on a dime, tops out at a jog |
-| Scissor lift | very low | lowest | Barely legal on a track; tippy and slow |
-| Service van | high | medium | The all-rounder |
-| Box truck | highest | low | Fast in a straight line, a handful in corners |
+| Rig | Top | Accel | Grip | The idea |
+| --- | --- | --- | --- | --- |
+| Forklift | lowest | quickest | highest | Off the line first, tops out early |
+| Scissor lift | very low | quick | lowest | Leaps away, then gives up |
+| Service van | high | medium | medium | The all-rounder, and the quickest lap for most people |
+| Box truck | highest | slowest | low | Fast flat out, but corners cost it more than anything else |
+
+Acceleration only matters because **cornering scrubs speed**. Holding the
+throttle flat the whole way round used to leave every rig pinned at its top
+speed, which made accel and grip decorative — an automated lap changed by less
+than a second when accel was doubled. With scrub, an automated lap that never
+lifts uses only 67% of a box truck's top speed against 98% of a forklift's,
+and the numbers on the card start meaning something.
 
 Off the tarmac each rig drops to a fraction of its top speed — the van keeps
 the most, the scissor lift the least. Hitting traffic or scenery costs speed
