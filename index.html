@@ -71,6 +71,7 @@
     <span><b>ENTER</b> start / retry</span>
     <span><b>R</b> back to the yard</span>
     <span><b>Off the tarmac is slow</b> — and so is hitting anything</span>
+    <span><b>Hit the big rise fast</b> — you'll catch air</span>
     <span><b>One lap. Fastest time wins.</b></span>
   </div>
 
@@ -166,7 +167,7 @@ function addRoad(enter, hold, leave, curve, height){
    a scissor lift and well under one in a box truck. */
 function buildTrack(){
   segments = [];
-  const S=[25,50,100], C=[2,4,6], Hh=[20,40,60];
+  const S=[25,50,100], C=[2,4,6], Hh=[16,28,42];
   addRoad(S[2],S[2],S[2], 0, 0);            // start straight
   addRoad(S[1],S[1],S[1], C[1], Hh[0]);     // right, uphill
   addRoad(S[0],S[0],S[0], -C[2], 0);        // hard left
@@ -176,6 +177,8 @@ function buildTrack(){
   addRoad(S[0],S[0],S[0], C[0], 0);
   addRoad(S[1],S[2],S[1], -C[1], -Hh[0]);   // sweeping left down
   addRoad(S[0],S[0],S[0], C[2], Hh[2]);     // late right, steep
+  addRoad(30, 8, 12, 0, 40);                // THE ramp — long face, abrupt lip
+  addRoad(S[1],S[1],S[1], 0, -40);          // and the drop off the back of it
   addRoad(S[1],S[1],S[1], 0, -Hh[2]);       // drop back to level
   addRoad(S[0],S[0],S[0], -C[1], 0);
   addRoad(S[2],S[2],S[2], 0, 0);            // run to the line
@@ -208,6 +211,18 @@ const CAR_LEN = 420;
  * the same 1500-unit body as the sprite does before it means a distance.
  */
 const halfWidth = r => (1500 * r.width / 2) / ROAD_W;
+
+/** The road's height at any point along the track, interpolated. */
+function roadYAt(z){
+  const zz = ((z % trackLength) + trackLength) % trackLength;
+  const s  = segAt(zz);
+  const p  = (zz % SEG_LEN) / SEG_LEN;
+  return s.p1.world.y + (s.p2.world.y - s.p1.world.y) * p;
+}
+
+const GRAVITY   = 26000;   // world units per second squared
+const LAUNCH_MIN= 3400;    // minimum speed to get airborne at all
+const LOOKAHEAD = 5200;    // how far up the road the camera leans to see over a rise
 
 /** Signed distance from b to a along the track, shortest way round. */
 function gap(a, b){
@@ -396,6 +411,9 @@ let rig  = RIGS[2];
 let pick = 2;
 
 let position=0, speed=0, playerX=0, steerHold=0;
+// Vertical: worldY is where the rig actually is, which is only the road's
+// height while it is on the ground.
+let worldY=0, vy=0, airborne=false, climb=0, landedHard=0, airT=0;
 let lapTime=0, countdown=3, finished=null, crashT=0;
 let best = {};              // per-rig personal best, from localStorage
 
@@ -459,6 +477,7 @@ cv.addEventListener('click', ()=>{ if(mode==='select') start(); else if(mode==='
 function reset(to){
   mode=to; position=0; speed=0; playerX=0; lapTime=0; countdown=3;
   finished=null; crashT=0; qualified=false; nameBuf='';
+  worldY=0; vy=0; airborne=false; climb=0; landedHard=0; airT=0;
   key.left=key.right=key.gas=key.brake=false;
   if(to==='select') placeTraffic();
 }
@@ -492,14 +511,15 @@ function update(dt){
   }
 
   // Pushed wide on a curve. Low grip means a wider push for the same corner.
-  playerX -= dx * speedPct * seg.curve * CENTRIFUGAL * (1 - rig.grip);
+  // None of it applies with the wheels off the ground.
+  if(!airborne) playerX -= dx * speedPct * seg.curve * CENTRIFUGAL * (1 - rig.grip);
 
   if(key.gas && crashT<=0) speed += rig.accel * dt * 1000;
   else if(key.brake)       speed += rig.brake * dt * 1000;
   else                     speed -= 1.0 * dt * 1000;
 
   // Off the tarmac: each rig loses a different amount of its top speed.
-  const off = Math.abs(playerX) > 1;
+  const off = Math.abs(playerX) > 1 && !airborne;
   if(off && speed > rig.maxSpeed * rig.offRoad){
     speed -= 3.2 * dt * 1000;
     playerX += (playerX>0?-1:1) * dt * 0.35;
@@ -550,6 +570,47 @@ function update(dt){
     }
   }
 
+  // ── ramps ────────────────────────────────────────────────────────
+  // Cresting a rise fast throws you off it. `climb` is how quickly the road
+  // is lifting you right now; when the road stops rising but you are still
+  // going up, that leftover speed becomes air. Gravity does the rest.
+  const roadY = roadYAt(nextPos);
+  const slope = (roadYAt(nextPos + SEG_LEN) - roadY) / SEG_LEN;
+  const nextClimb = slope * speed;
+
+  if(airborne){
+    airT += dt;
+    vy -= GRAVITY * dt;
+    worldY += vy * dt;
+    // The grace period matters. At the instant of launch the rig and the road
+    // are climbing at exactly the same rate, so they sit on top of each other
+    // for a few frames until the road curves away — and a bare `worldY <= roadY`
+    // reads that as having landed before the jump has begun. Every launch
+    // ended on the frame it started.
+    if(airT > 0.05 && worldY <= roadY){
+      const impact = -vy;
+      worldY = roadY; vy = 0; airborne = false;
+      // A heavy landing scrubs speed and rattles the steering for a moment.
+      if(impact > 5200){ speed *= 0.86; crashT = Math.max(crashT, 0.22); landedHard = 0.35; }
+    }
+  } else {
+    worldY = roadY;
+    // You leave the ground when staying on it would need more downward
+    // acceleration than gravity can supply — which is exactly what the crest
+    // of a steep rise asks for at speed.
+    //
+    // The first version instead looked for the climb rate collapsing within a
+    // single frame. Crests are eased, so it only falls about a tenth per frame
+    // and the condition could never fire, on any hill, at any speed.
+    const dClimb = (nextClimb - climb) / Math.max(dt, 1e-4);
+    if(speed > LAUNCH_MIN && dClimb < -GRAVITY){
+      airborne = true; vy = climb; airT = 0;
+      worldY = roadY + 2;           // clear of the road, so the two can separate
+    }
+  }
+  climb = airborne ? climb : nextClimb;
+  if(landedHard > 0) landedHard -= dt;
+
   const before = position;
   position = nextPos;
   if(position < before){            // crossed the line
@@ -586,7 +647,29 @@ function render(){
   const camZ    = (position - CAM_BACK + trackLength) % trackLength;
   const baseSeg = segAt(camZ);
   const basePct = (camZ % SEG_LEN) / SEG_LEN;
-  const playerY = baseSeg.p1.world.y + (baseSeg.p2.world.y - baseSeg.p1.world.y) * basePct;
+
+  // Camera height, and the reason hills used to be blind.
+  //
+  // Sitting the camera on the road means that on a climb you are looking
+  // straight at the hill and the road beyond it is simply not in shot. So it
+  // also leans toward the height of the road some way ahead: on a rise that
+  // lifts the eye enough to see over the crest, and on the flat the two are
+  // the same number and nothing changes.
+  //
+  // `worldY` rather than the road, so that when the rig is in the air the
+  // camera goes with it — which is the best view on the track.
+  const roadHere  = roadYAt(camZ);
+  const roadAhead = roadYAt(camZ + LOOKAHEAD);
+  const lean      = roadHere * 0.45 + roadAhead * 0.55;
+
+  // The camera only follows a fraction of a jump, and stops following it
+  // entirely past a point. Riding the full height looks right for about half a
+  // second and then you are staring down at a ribbon of road with the rest of
+  // the screen full of grass — the horizon here is a painted band, so it can't
+  // follow the eye up. A quarter of the height reads as air without losing the
+  // road you are about to land on.
+  const airLift = Math.min(Math.max(0, worldY - roadHere) * 0.25, 700);
+  const playerY = Math.max(lean, roadHere + airLift);
 
   let maxY = H, dxx = -(baseSeg.curve * basePct), xx = 0;
 
@@ -640,8 +723,21 @@ function render(){
   // further away. Tuned so a van fills about a quarter of the width; deriving
   // it from CAM_DEPTH gave a sprite as wide as the whole canvas.
   const bounce = (speed/rig.maxSpeed) * Math.sin(performance.now()/60) * 2;
+  // Air is shown by lifting the sprite off the bottom of the frame. Clamped so
+  // a huge launch can't park the rig in the sky.
+  const air = Math.min(150, Math.max(0, (worldY - roadYAt(position)) * 0.045));
+  if(air > 1){
+    // Shadow first, so the rig sits above it rather than the other way round —
+    // drawn afterwards it painted over its own wheels. It shrinks as the rig
+    // climbs, which is most of what makes the height readable.
+    x.fillStyle = 'rgba(0,0,0,' + (0.30 - air*0.0012).toFixed(3) + ')';
+    const sw = Math.max(30, 150 - air*0.55);
+    x.beginPath();
+    x.ellipse(W/2, H - 14, sw*0.5, Math.max(4, sw*0.11), 0, 0, Math.PI*2);
+    x.fill();
+  }
   drawRig(rig, 0.00040, W/2 + (crashT>0 ? Math.sin(performance.now()/28)*14 : 0),
-          H - 10 + bounce, 0, steerHold);
+          H - 10 + bounce - air, 0, steerHold);
 }
 
 /* ── HUD and screens ─────────────────────────────────────────────── */
